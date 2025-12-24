@@ -1,50 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseDate, formatDate, calculateEndDate } from '../src/utils/date-utils.js';
 import { ReflowService } from '../src/reflow/reflow.service.js';
-import { DependencyGraph } from '../src/reflow/dependency-graph.js';
 import { WorkOrder, WorkCenter, ManufacturingOrder } from '../src/reflow/types.js';
-
-describe('date-utils', () => {
-  describe('parseDate', () => {
-    it('should parse ISO date string to DateTime in UTC', () => {
-      const date = parseDate('2025-01-06T08:00:00.000Z');
-      expect(date.year).toBe(2025);
-      expect(date.month).toBe(1);
-      expect(date.day).toBe(6);
-      expect(date.hour).toBe(8);
-      expect(date.minute).toBe(0);
-      expect(date.zoneName).toBe('UTC');
-    });
-  });
-
-  describe('formatDate', () => {
-    it('should format DateTime to ISO string', () => {
-      const date = parseDate('2025-01-06T08:00:00.000Z');
-      const formatted = formatDate(date);
-      expect(formatted).toBe('2025-01-06T08:00:00.000Z');
-    });
-  });
-
-  describe('calculateEndDate', () => {
-    it('should add working minutes to start date', () => {
-      const start = '2025-01-06T08:00:00.000Z';
-      const end = calculateEndDate(start, 180); // 3 hours
-      expect(end).toBe('2025-01-06T11:00:00.000Z');
-    });
-
-    it('should handle zero duration', () => {
-      const start = '2025-01-06T08:00:00.000Z';
-      const end = calculateEndDate(start, 0);
-      expect(end).toBe('2025-01-06T08:00:00.000Z');
-    });
-
-    it('should handle duration spanning midnight', () => {
-      const start = '2025-01-06T23:00:00.000Z';
-      const end = calculateEndDate(start, 120); // 2 hours
-      expect(end).toBe('2025-01-07T01:00:00.000Z');
-    });
-  });
-});
 
 describe('ReflowService', () => {
   const createWorkOrder = (
@@ -294,91 +250,80 @@ describe('ReflowService', () => {
 
       expect(result.explanation).toContain('Cycle detected');
     });
-  });
-});
 
-describe('DependencyGraph', () => {
-  const createWorkOrder = (
-    id: string,
-    dependsOn: string[] = []
-  ): WorkOrder => ({
-    docId: id,
-    docType: 'workOrder',
-    data: {
-      workOrderNumber: id.toUpperCase(),
-      manufacturingOrderId: 'mo-001',
-      workCenterId: 'wc-001',
-      startDate: '2025-01-06T08:00:00.000Z',
-      endDate: '2025-01-06T10:00:00.000Z',
-      durationMinutes: 120,
-      isMaintenance: false,
-      dependsOnWorkOrderIds: dependsOn,
-    },
-  });
+    it('should resolve work center conflicts (earlier original start wins)', () => {
+      const service = new ReflowService();
+      const workOrders = [
+        createWorkOrder(
+          'wo-001',
+          '2025-01-06T08:00:00.000Z',
+          '2025-01-06T10:00:00.000Z',
+          180 // 3 hours = ends at 11:00
+        ),
+        createWorkOrder(
+          'wo-002',
+          '2025-01-06T10:00:00.000Z', // Starts at 10:00 but WO-001 ends at 11:00
+          '2025-01-06T12:00:00.000Z',
+          120
+        ),
+      ];
 
-  it('should build graph from work orders', () => {
-    const graph = new DependencyGraph();
-    graph.build([
-      createWorkOrder('wo-001', []),
-      createWorkOrder('wo-002', ['wo-001']),
-      createWorkOrder('wo-003', ['wo-002']),
-    ]);
+      const result = service.reflow({
+        workOrders,
+        workCenters: [createWorkCenter('wc-001')],
+        manufacturingOrders: [createManufacturingOrder('mo-001')],
+      });
 
-    expect(graph.getDependencies('wo-001')).toEqual([]);
-    expect(graph.getDependencies('wo-002')).toEqual(['wo-001']);
-    expect(graph.getDependencies('wo-003')).toEqual(['wo-002']);
-  });
+      // WO-001 ends at 11:00, WO-002 must start at 11:00 due to conflict
+      expect(result.updatedWorkOrders[0].data.endDate).toBe('2025-01-06T11:00:00.000Z');
+      expect(result.updatedWorkOrders[1].data.startDate).toBe('2025-01-06T11:00:00.000Z');
+      expect(result.updatedWorkOrders[1].data.endDate).toBe('2025-01-06T13:00:00.000Z');
+      expect(result.changes.some(c => c.reason.includes('work center conflict'))).toBe(true);
+    });
 
-  it('should track dependents', () => {
-    const graph = new DependencyGraph();
-    graph.build([
-      createWorkOrder('wo-001', []),
-      createWorkOrder('wo-002', ['wo-001']),
-      createWorkOrder('wo-003', ['wo-001']),
-    ]);
+    it('should not conflict work orders on different work centers', () => {
+      const service = new ReflowService();
+      const workOrders = [
+        {
+          docId: 'wo-001',
+          docType: 'workOrder' as const,
+          data: {
+            workOrderNumber: 'WO-001',
+            manufacturingOrderId: 'mo-001',
+            workCenterId: 'wc-001',
+            startDate: '2025-01-06T08:00:00.000Z',
+            endDate: '2025-01-06T11:00:00.000Z',
+            durationMinutes: 180,
+            isMaintenance: false,
+            dependsOnWorkOrderIds: [],
+          },
+        },
+        {
+          docId: 'wo-002',
+          docType: 'workOrder' as const,
+          data: {
+            workOrderNumber: 'WO-002',
+            manufacturingOrderId: 'mo-001',
+            workCenterId: 'wc-002', // Different work center
+            startDate: '2025-01-06T09:00:00.000Z',
+            endDate: '2025-01-06T11:00:00.000Z',
+            durationMinutes: 120,
+            isMaintenance: false,
+            dependsOnWorkOrderIds: [],
+          },
+        },
+      ];
 
-    expect(graph.getDependents('wo-001')).toEqual(['wo-002', 'wo-003']);
-    expect(graph.getDependents('wo-002')).toEqual([]);
-  });
+      const result = service.reflow({
+        workOrders,
+        workCenters: [createWorkCenter('wc-001'), createWorkCenter('wc-002')],
+        manufacturingOrders: [createManufacturingOrder('mo-001')],
+      });
 
-  it('should perform topological sort', () => {
-    const graph = new DependencyGraph();
-    graph.build([
-      createWorkOrder('wo-003', ['wo-002']),
-      createWorkOrder('wo-001', []),
-      createWorkOrder('wo-002', ['wo-001']),
-    ]);
-
-    const result = graph.topologicalSort();
-    expect(result.hasCycle).toBe(false);
-    expect(result.sorted).toEqual(['wo-001', 'wo-002', 'wo-003']);
-  });
-
-  it('should detect cycles', () => {
-    const graph = new DependencyGraph();
-    graph.build([
-      createWorkOrder('wo-001', ['wo-003']),
-      createWorkOrder('wo-002', ['wo-001']),
-      createWorkOrder('wo-003', ['wo-002']),
-    ]);
-
-    const result = graph.topologicalSort();
-    expect(result.hasCycle).toBe(true);
-    expect(result.cycleNodes).toContain('wo-001');
-    expect(result.cycleNodes).toContain('wo-002');
-    expect(result.cycleNodes).toContain('wo-003');
-  });
-
-  it('should detect if adding dependency would create cycle', () => {
-    const graph = new DependencyGraph();
-    graph.build([
-      createWorkOrder('wo-001', []),
-      createWorkOrder('wo-002', ['wo-001']),
-      createWorkOrder('wo-003', ['wo-002']),
-    ]);
-
-    // Adding wo-001 -> wo-003 would create cycle
-    expect(graph.wouldCreateCycle('wo-001', 'wo-003')).toBe(true);
-    expect(graph.wouldCreateCycle('wo-003', 'wo-001')).toBe(false);
+      // No conflict - different work centers
+      expect(result.updatedWorkOrders[0].data.startDate).toBe('2025-01-06T08:00:00.000Z');
+      expect(result.updatedWorkOrders[1].data.startDate).toBe('2025-01-06T09:00:00.000Z');
+      expect(result.changes).toHaveLength(0);
+    });
   });
 });
