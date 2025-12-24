@@ -1,9 +1,9 @@
 /**
- * Demo runner.
+ * Demo runner with console table output.
  */
 
 import { ReflowService } from './reflow/reflow.service.js';
-import { ReflowInput } from './reflow/types.js';
+import { ReflowInput, WorkOrder, ReflowChange } from './reflow/types.js';
 import * as scenario0 from './data/scenario-0-basic.js';
 import * as scenario1 from './data/scenario-1-delay.js';
 import * as scenario2 from './data/scenario-2-shifts.js';
@@ -15,16 +15,45 @@ import * as scenario7 from './data/scenario-7-setup-time.js';
 
 const service = new ReflowService();
 
-function runScenario(name: string, data: ReflowInput) {
-  console.log(`=== ${name} ===\n`);
+function formatDateTime(iso: string): string {
+  return iso.replace('T', ' ').replace('.000Z', '');
+}
 
-  console.log('Input Work Orders:');
-  for (const wo of data.workOrders) {
-    const deps = wo.data.dependsOnWorkOrderIds.length > 0
-      ? ` [depends on: ${wo.data.dependsOnWorkOrderIds.join(', ')}]`
-      : '';
-    console.log(`  ${wo.data.workOrderNumber}: ${wo.data.startDate} -> ${wo.data.endDate} (${wo.data.durationMinutes} min)${deps}`);
+function buildWorkOrderTable(workOrders: WorkOrder[], title: string) {
+  console.log(`\n${title}:`);
+  const rows = workOrders.map(wo => ({
+    'Work Order': wo.data.workOrderNumber,
+    'Start': formatDateTime(wo.data.startDate),
+    'End': formatDateTime(wo.data.endDate),
+    'Duration': `${wo.data.durationMinutes} min`,
+    'Setup': wo.data.setupTimeMinutes ? `${wo.data.setupTimeMinutes} min` : '-',
+    'Dependencies': wo.data.dependsOnWorkOrderIds.join(', ') || '-',
+  }));
+  console.table(rows);
+}
+
+function buildChangesTable(changes: ReflowChange[]) {
+  if (changes.length === 0) {
+    console.log('\nChanges: None');
+    return;
   }
+  console.log('\nChanges:');
+  const rows = changes.map(c => ({
+    'Work Order': c.workOrderNumber,
+    'Original Start': formatDateTime(c.originalStartDate),
+    'New Start': formatDateTime(c.newStartDate),
+    'Delay': `${c.delayMinutes} min`,
+    'Reason': c.reason,
+  }));
+  console.table(rows);
+}
+
+function runScenario(name: string, data: ReflowInput) {
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`  ${name}`);
+  console.log('='.repeat(60));
+
+  buildWorkOrderTable(data.workOrders, 'Input Work Orders');
 
   const result = service.reflow({
     workOrders: data.workOrders,
@@ -32,28 +61,19 @@ function runScenario(name: string, data: ReflowInput) {
     manufacturingOrders: data.manufacturingOrders,
   });
 
-  console.log('\nOutput Work Orders:');
-  for (const wo of result.updatedWorkOrders) {
-    console.log(`  ${wo.data.workOrderNumber}: ${wo.data.startDate} -> ${wo.data.endDate}`);
-  }
-
-  console.log('\nChanges:');
-  if (result.changes.length === 0) {
-    console.log('  No changes');
-  } else {
-    for (const change of result.changes) {
-      console.log(`  ${change.workOrderNumber}: ${change.reason} (delay: ${change.delayMinutes} min)`);
-    }
-  }
+  buildWorkOrderTable(result.updatedWorkOrders, 'Output Work Orders');
+  buildChangesTable(result.changes);
 
   console.log('\nMetrics:');
-  console.log(`  Total delay: ${result.metrics.totalDelayMinutes} min`);
-  console.log(`  Average delay: ${result.metrics.averageDelayMinutes} min`);
-  console.log(`  Max delay: ${result.metrics.maxDelayMinutes} min`);
-  console.log(`  Rescheduled: ${result.metrics.workOrdersRescheduled}, Unchanged: ${result.metrics.workOrdersUnchanged}`);
+  console.table({
+    'Total Delay': `${result.metrics.totalDelayMinutes} min`,
+    'Average Delay': `${result.metrics.averageDelayMinutes} min`,
+    'Max Delay': `${result.metrics.maxDelayMinutes} min`,
+    'Rescheduled': result.metrics.workOrdersRescheduled,
+    'Unchanged': result.metrics.workOrdersUnchanged,
+  });
 
-  console.log('\n' + result.explanation);
-  console.log('\n');
+  console.log(`\n${result.explanation}`);
 }
 
 runScenario('Scenario 0: Basic Reflow Test', scenario0);
