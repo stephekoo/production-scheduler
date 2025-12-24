@@ -6,6 +6,7 @@ import { ReflowService } from './reflow/reflow.service.js';
 import { ReflowInput } from './reflow/types.js';
 import * as scenario0 from './data/scenario-0-basic.js';
 import * as scenario1 from './data/scenario-1-delay.js';
+import * as scenario2 from './data/scenario-2-shifts.js';
 
 const service = new ReflowService();
 
@@ -46,3 +47,4 @@ function runScenario(name: string, data: ReflowInput) {
 
 runScenario('Scenario 0: Basic Reflow Test', scenario0);
 runScenario('Scenario 1: Delay Cascade', scenario1);
+runScenario('Scenario 2: Shift Spanning', scenario2);

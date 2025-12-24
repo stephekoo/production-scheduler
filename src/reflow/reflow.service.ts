@@ -6,10 +6,11 @@
  * - durationMinutes = working time, not elapsed time
  * - Dependencies must complete before dependent work can start
  * - Work center conflicts: earlier original start wins
+ * - Shifts define when work can be performed
  */
 
-import { WorkOrder, ReflowInput, ReflowResult, ReflowChange } from './types.js';
-import { calculateEndDate, parseDate } from '../utils/date-utils.js';
+import { WorkOrder, WorkCenter, ReflowInput, ReflowResult, ReflowChange } from './types.js';
+import { calculateEndDateWithShifts, parseDate, Shift, getNextShiftStart, formatDate } from '../utils/date-utils.js';
 import { DependencyGraph } from './dependency-graph.js';
 import { DateTime } from 'luxon';
 
@@ -26,9 +27,15 @@ export class ReflowService {
    * Reflow work orders to produce a valid schedule.
    */
   reflow(input: ReflowInput): ReflowResult {
-    const { workOrders } = input;
+    const { workOrders, workCenters } = input;
     const changes: ReflowChange[] = [];
     const workOrderMap = new Map<string, WorkOrder>();
+    const workCenterMap = new Map<string, WorkCenter>();
+
+    // Build work center lookup
+    for (const wc of workCenters) {
+      workCenterMap.set(wc.docId, wc);
+    }
 
     // Build dependency graph
     this.graph.build(workOrders);
@@ -85,6 +92,10 @@ export class ReflowService {
       const originalStart = wo.data.startDate;
       const originalEnd = wo.data.endDate;
 
+      // Get work center shifts
+      const workCenter = workCenterMap.get(wo.data.workCenterId);
+      const shifts: Shift[] = workCenter?.data.shifts ?? [];
+
       // Calculate earliest start based on dependencies
       let earliestStart = parseDate(originalStart);
       const dependencies = this.graph.getDependencies(wo.docId);
@@ -99,13 +110,18 @@ export class ReflowService {
         }
       }
 
+      // Align to next shift start if shifts are defined
+      if (shifts.length > 0) {
+        earliestStart = getNextShiftStart(earliestStart, shifts);
+      }
+
       // Check for work center conflicts
       const workCenterId = wo.data.workCenterId;
       const slots = workCenterSlots.get(workCenterId) ?? [];
 
       // Find earliest available slot that doesn't conflict
       let proposedStart = earliestStart;
-      let proposedEnd = parseDate(calculateEndDate(proposedStart.toISO()!, wo.data.durationMinutes));
+      let proposedEnd = parseDate(calculateEndDateWithShifts(formatDate(proposedStart), wo.data.durationMinutes, shifts));
 
       // Keep pushing forward until no conflicts
       let hasConflict = true;
@@ -115,15 +131,18 @@ export class ReflowService {
           if (this.overlaps(proposedStart, proposedEnd, slot.start, slot.end)) {
             // Push to after this slot
             proposedStart = slot.end;
-            proposedEnd = parseDate(calculateEndDate(proposedStart.toISO()!, wo.data.durationMinutes));
+            if (shifts.length > 0) {
+              proposedStart = getNextShiftStart(proposedStart, shifts);
+            }
+            proposedEnd = parseDate(calculateEndDateWithShifts(formatDate(proposedStart), wo.data.durationMinutes, shifts));
             hasConflict = true;
             break;
           }
         }
       }
 
-      const newStart = proposedStart.toISO()!;
-      const newEnd = proposedEnd.toISO()!;
+      const newStart = formatDate(proposedStart);
+      const newEnd = formatDate(proposedEnd);
 
       const updated = this.cloneWorkOrder(wo);
       updated.data.startDate = newStart;
