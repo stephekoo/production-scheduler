@@ -8,6 +8,9 @@ import * as scenario0 from './data/scenario-0-basic.js';
 import * as scenario1 from './data/scenario-1-delay.js';
 import * as scenario2 from './data/scenario-2-shifts.js';
 import * as scenario3 from './data/scenario-3-maintenance.js';
+import * as scenario4 from './data/scenario-4-multi-constraint.js';
+import * as scenario5 from './data/scenario-5-competing-orders.js';
+import * as scenario6 from './data/scenario-6-impossible.js';
 
 const service = new ReflowService();
 
@@ -50,3 +53,6 @@ runScenario('Scenario 0: Basic Reflow Test', scenario0);
 runScenario('Scenario 1: Delay Cascade', scenario1);
 runScenario('Scenario 2: Shift Spanning', scenario2);
 runScenario('Scenario 3: Maintenance Window', scenario3);
+runScenario('Scenario 4: Multi-Constraint', scenario4);
+runScenario('Scenario 5: Competing Orders', scenario5);
+runScenario('Scenario 6: Impossible (Circular)', scenario6);

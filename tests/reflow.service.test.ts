@@ -325,5 +325,90 @@ describe('ReflowService', () => {
       expect(result.updatedWorkOrders[1].data.startDate).toBe('2025-01-06T09:00:00.000Z');
       expect(result.changes).toHaveLength(0);
     });
+
+    it('should handle work order scheduled on day with no shifts', () => {
+      const service = new ReflowService();
+      // Saturday has no shift defined (only Mon-Fri)
+      const workOrders = [
+        createWorkOrder(
+          'wo-001',
+          '2025-01-11T08:00:00.000Z', // Saturday
+          '2025-01-11T10:00:00.000Z',
+          120
+        ),
+      ];
+
+      const result = service.reflow({
+        workOrders,
+        workCenters: [createWorkCenter('wc-001')],
+        manufacturingOrders: [createManufacturingOrder('mo-001')],
+      });
+
+      // Should push to next available shift (Monday)
+      expect(result.updatedWorkOrders[0].data.startDate).toBe('2025-01-13T08:00:00.000Z');
+      expect(result.changes).toHaveLength(1);
+    });
+
+    it('should handle work order starting outside shift hours', () => {
+      const service = new ReflowService();
+      // Work order starts at 6AM, before shift starts at 8AM
+      const workOrders = [
+        createWorkOrder(
+          'wo-001',
+          '2025-01-06T06:00:00.000Z',
+          '2025-01-06T08:00:00.000Z',
+          120
+        ),
+      ];
+
+      const result = service.reflow({
+        workOrders,
+        workCenters: [createWorkCenter('wc-001')],
+        manufacturingOrders: [createManufacturingOrder('mo-001')],
+      });
+
+      // Should align to shift start
+      expect(result.updatedWorkOrders[0].data.startDate).toBe('2025-01-06T08:00:00.000Z');
+      expect(result.updatedWorkOrders[0].data.endDate).toBe('2025-01-06T10:00:00.000Z');
+    });
+
+    it('should skip maintenance window during scheduling', () => {
+      const service = new ReflowService();
+      const workCenter: WorkCenter = {
+        docId: 'wc-001',
+        docType: 'workCenter',
+        data: {
+          name: 'Test Work Center',
+          shifts: [
+            { dayOfWeek: 1, startHour: 8, endHour: 17 },
+            { dayOfWeek: 2, startHour: 8, endHour: 17 },
+          ],
+          maintenanceWindows: [
+            {
+              startDate: '2025-01-06T10:00:00.000Z',
+              endDate: '2025-01-06T14:00:00.000Z',
+            },
+          ],
+        },
+      };
+
+      const workOrders = [
+        createWorkOrder(
+          'wo-001',
+          '2025-01-06T08:00:00.000Z',
+          '2025-01-06T12:00:00.000Z',
+          240 // 4 hours
+        ),
+      ];
+
+      const result = service.reflow({
+        workOrders,
+        workCenters: [workCenter],
+        manufacturingOrders: [createManufacturingOrder('mo-001')],
+      });
+
+      // 8:00-10:00 = 2 hours, skip 10:00-14:00 maintenance, 14:00-16:00 = 2 hours
+      expect(result.updatedWorkOrders[0].data.endDate).toBe('2025-01-06T16:00:00.000Z');
+    });
   });
 });
