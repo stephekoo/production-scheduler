@@ -147,5 +147,66 @@ describe('ConstraintChecker', () => {
 
       expect(result.valid).toBe(true);
     });
+
+    it('should detect maintenance window violation', () => {
+      const checker = new ConstraintChecker();
+      const workCenter: WorkCenter = {
+        docId: 'wc-001',
+        docType: 'workCenter',
+        data: {
+          name: 'Test Work Center',
+          shifts: [
+            { dayOfWeek: 1, startHour: 8, endHour: 17 },
+          ],
+          maintenanceWindows: [
+            {
+              startDate: '2025-01-06T10:00:00.000Z',
+              endDate: '2025-01-06T12:00:00.000Z',
+            },
+          ],
+        },
+      };
+
+      const result = checker.validate({
+        workOrders: [
+          createWorkOrder('wo-001', '2025-01-06T09:00:00.000Z', '2025-01-06T11:00:00.000Z'),
+        ],
+        workCenters: [workCenter],
+        manufacturingOrders: [],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.violations.some(v => v.type === 'maintenance')).toBe(true);
+    });
+
+    it('should allow work that does not overlap maintenance', () => {
+      const checker = new ConstraintChecker();
+      const workCenter: WorkCenter = {
+        docId: 'wc-001',
+        docType: 'workCenter',
+        data: {
+          name: 'Test Work Center',
+          shifts: [
+            { dayOfWeek: 1, startHour: 8, endHour: 17 },
+          ],
+          maintenanceWindows: [
+            {
+              startDate: '2025-01-06T10:00:00.000Z',
+              endDate: '2025-01-06T12:00:00.000Z',
+            },
+          ],
+        },
+      };
+
+      const result = checker.validate({
+        workOrders: [
+          createWorkOrder('wo-001', '2025-01-06T08:00:00.000Z', '2025-01-06T10:00:00.000Z'),
+        ],
+        workCenters: [workCenter],
+        manufacturingOrders: [],
+      });
+
+      expect(result.valid).toBe(true);
+    });
   });
 });

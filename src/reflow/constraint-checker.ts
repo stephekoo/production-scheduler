@@ -5,11 +5,11 @@
  * - Dependencies: work order starts after all dependencies complete
  * - Work center conflicts: no overlapping work orders on same work center
  * - Shifts: work orders only scheduled during shift hours
- * - Maintenance windows: (to be added in Phase 6)
+ * - Maintenance windows: no work scheduled during maintenance
  */
 
 import { WorkOrder, WorkCenter, ReflowInput } from './types.js';
-import { parseDate, isWithinShift, Shift } from '../utils/date-utils.js';
+import { parseDate, isWithinShift, Shift, MaintenanceWindow, isInMaintenanceWindow } from '../utils/date-utils.js';
 import { DateTime } from 'luxon';
 
 export interface ConstraintViolation {
@@ -34,6 +34,7 @@ export class ConstraintChecker {
     violations.push(...this.checkDependencies(input.workOrders));
     violations.push(...this.checkWorkCenterConflicts(input.workOrders));
     violations.push(...this.checkShifts(input.workOrders, input.workCenters));
+    violations.push(...this.checkMaintenanceWindows(input.workOrders, input.workCenters));
 
     return {
       valid: violations.length === 0,
@@ -178,5 +179,45 @@ export class ConstraintChecker {
     }
 
     return false;
+  }
+
+  /**
+   * Check that no work orders overlap with maintenance windows.
+   */
+  private checkMaintenanceWindows(workOrders: WorkOrder[], workCenters: WorkCenter[]): ConstraintViolation[] {
+    const violations: ConstraintViolation[] = [];
+    const workCenterMap = new Map<string, WorkCenter>();
+
+    for (const wc of workCenters) {
+      workCenterMap.set(wc.docId, wc);
+    }
+
+    for (const wo of workOrders) {
+      if (wo.data.isMaintenance) continue;
+
+      const workCenter = workCenterMap.get(wo.data.workCenterId);
+      if (!workCenter || !workCenter.data.maintenanceWindows?.length) continue;
+
+      const windows: MaintenanceWindow[] = workCenter.data.maintenanceWindows;
+      const woStart = parseDate(wo.data.startDate);
+      const woEnd = parseDate(wo.data.endDate);
+
+      for (const window of windows) {
+        const maintStart = parseDate(window.startDate);
+        const maintEnd = parseDate(window.endDate);
+
+        // Check if work order overlaps with maintenance window
+        if (this.overlaps(woStart, woEnd, maintStart, maintEnd)) {
+          violations.push({
+            workOrderId: wo.docId,
+            workOrderNumber: wo.data.workOrderNumber,
+            type: 'maintenance',
+            message: `Overlaps with maintenance window (${window.startDate} - ${window.endDate})`,
+          });
+        }
+      }
+    }
+
+    return violations;
   }
 }

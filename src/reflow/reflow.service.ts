@@ -10,7 +10,14 @@
  */
 
 import { WorkOrder, WorkCenter, ReflowInput, ReflowResult, ReflowChange } from './types.js';
-import { calculateEndDateWithShifts, parseDate, Shift, getNextShiftStart, formatDate } from '../utils/date-utils.js';
+import {
+  calculateEndDateWithShiftsAndMaintenance,
+  parseDate,
+  Shift,
+  MaintenanceWindow,
+  getNextAvailableTime,
+  formatDate,
+} from '../utils/date-utils.js';
 import { DependencyGraph } from './dependency-graph.js';
 import { DateTime } from 'luxon';
 
@@ -92,9 +99,10 @@ export class ReflowService {
       const originalStart = wo.data.startDate;
       const originalEnd = wo.data.endDate;
 
-      // Get work center shifts
+      // Get work center shifts and maintenance windows
       const workCenter = workCenterMap.get(wo.data.workCenterId);
       const shifts: Shift[] = workCenter?.data.shifts ?? [];
+      const maintenanceWindows: MaintenanceWindow[] = workCenter?.data.maintenanceWindows ?? [];
 
       // Calculate earliest start based on dependencies
       let earliestStart = parseDate(originalStart);
@@ -110,10 +118,8 @@ export class ReflowService {
         }
       }
 
-      // Align to next shift start if shifts are defined
-      if (shifts.length > 0) {
-        earliestStart = getNextShiftStart(earliestStart, shifts);
-      }
+      // Align to next available time (respecting shifts and maintenance)
+      earliestStart = getNextAvailableTime(earliestStart, shifts, maintenanceWindows);
 
       // Check for work center conflicts
       const workCenterId = wo.data.workCenterId;
@@ -121,7 +127,9 @@ export class ReflowService {
 
       // Find earliest available slot that doesn't conflict
       let proposedStart = earliestStart;
-      let proposedEnd = parseDate(calculateEndDateWithShifts(formatDate(proposedStart), wo.data.durationMinutes, shifts));
+      let proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
+        formatDate(proposedStart), wo.data.durationMinutes, shifts, maintenanceWindows
+      ));
 
       // Keep pushing forward until no conflicts
       let hasConflict = true;
@@ -131,10 +139,10 @@ export class ReflowService {
           if (this.overlaps(proposedStart, proposedEnd, slot.start, slot.end)) {
             // Push to after this slot
             proposedStart = slot.end;
-            if (shifts.length > 0) {
-              proposedStart = getNextShiftStart(proposedStart, shifts);
-            }
-            proposedEnd = parseDate(calculateEndDateWithShifts(formatDate(proposedStart), wo.data.durationMinutes, shifts));
+            proposedStart = getNextAvailableTime(proposedStart, shifts, maintenanceWindows);
+            proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
+              formatDate(proposedStart), wo.data.durationMinutes, shifts, maintenanceWindows
+            ));
             hasConflict = true;
             break;
           }

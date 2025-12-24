@@ -7,6 +7,20 @@
  * - Maintenance windows = blocked time on work centers
  */
 
+// Shift definition for work centers
+export interface Shift {
+  dayOfWeek: number;  // 0=Sunday...6=Saturday (Luxon uses 1=Mon...7=Sun, convert with weekday % 7)
+  startHour: number;  // 0-23
+  endHour: number;    // 0-23
+}
+
+// Maintenance window (blocked time on work center)
+export interface MaintenanceWindow {
+  startDate: string;
+  endDate: string;
+  reason?: string;
+}
+
 // Work Order
 export interface WorkOrder {
   docId: string;
@@ -29,16 +43,8 @@ export interface WorkCenter {
   docType: 'workCenter';
   data: {
     name: string;
-    shifts: Array<{
-      dayOfWeek: number;    // 0-6, Sunday = 0
-      startHour: number;    // 0-23
-      endHour: number;      // 0-23
-    }>;
-    maintenanceWindows: Array<{
-      startDate: string;
-      endDate: string;
-      reason?: string;
-    }>;
+    shifts: Shift[];
+    maintenanceWindows: MaintenanceWindow[];
   };
 }
 

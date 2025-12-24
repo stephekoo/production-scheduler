@@ -9,12 +9,10 @@
  */
 
 import { DateTime } from 'luxon';
+import { Shift, MaintenanceWindow } from '../reflow/types.js';
 
-export interface Shift {
-  dayOfWeek: number;  // 0=Sunday...6=Saturday
-  startHour: number;  // 0-23
-  endHour: number;    // 0-23
-}
+// Re-export for convenience
+export type { Shift, MaintenanceWindow };
 
 /**
  * Parse ISO date string to Luxon DateTime (UTC).
@@ -163,4 +161,133 @@ export function calculateEndDate(startDate: string, workingMinutes: number): str
   const start = parseDate(startDate);
   const end = start.plus({ minutes: workingMinutes });
   return formatDate(end);
+}
+
+/**
+ * Check if a DateTime falls within any maintenance window.
+ */
+export function isInMaintenanceWindow(date: DateTime, windows: MaintenanceWindow[]): boolean {
+  for (const window of windows) {
+    const start = parseDate(window.startDate);
+    const end = parseDate(window.endDate);
+    if (date >= start && date < end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Get the end of any maintenance window that the date falls within.
+ */
+export function getMaintenanceWindowEnd(date: DateTime, windows: MaintenanceWindow[]): DateTime | null {
+  for (const window of windows) {
+    const start = parseDate(window.startDate);
+    const end = parseDate(window.endDate);
+    if (date >= start && date < end) {
+      return end;
+    }
+  }
+  return null;
+}
+
+/**
+ * Get next available work time, respecting both shifts and maintenance windows.
+ */
+export function getNextAvailableTime(
+  date: DateTime,
+  shifts: Shift[],
+  maintenanceWindows: MaintenanceWindow[]
+): DateTime {
+  let current = date;
+  const maxIterations = 1000; // Prevent infinite loop
+
+  for (let i = 0; i < maxIterations; i++) {
+    // First, align to shift if shifts are defined
+    if (shifts.length > 0) {
+      current = getNextShiftStart(current, shifts);
+    }
+
+    // Check if in maintenance window
+    const maintenanceEnd = getMaintenanceWindowEnd(current, maintenanceWindows);
+    if (maintenanceEnd) {
+      current = maintenanceEnd;
+      continue;
+    }
+
+    // Not in maintenance, we're good
+    return current;
+  }
+
+  return date;
+}
+
+/**
+ * Get available working minutes from current time until shift end or maintenance.
+ */
+export function getAvailableMinutes(
+  date: DateTime,
+  shifts: Shift[],
+  maintenanceWindows: MaintenanceWindow[]
+): number {
+  // Get remaining shift minutes
+  let available = shifts.length > 0 ? getRemainingShiftMinutes(date, shifts) : Infinity;
+
+  // Check for upcoming maintenance window
+  for (const window of maintenanceWindows) {
+    const start = parseDate(window.startDate);
+    if (start > date) {
+      const minutesUntilMaintenance = Math.floor(start.diff(date, 'minutes').minutes);
+      available = Math.min(available, minutesUntilMaintenance);
+    }
+  }
+
+  return available === Infinity ? 1440 : available; // Default to 24 hours if no constraints
+}
+
+/**
+ * Calculate end date respecting shifts and maintenance windows.
+ */
+export function calculateEndDateWithShiftsAndMaintenance(
+  startDate: string,
+  workingMinutes: number,
+  shifts: Shift[],
+  maintenanceWindows: MaintenanceWindow[]
+): string {
+  if (workingMinutes <= 0) {
+    return startDate;
+  }
+
+  // If no constraints, fall back to simple calculation
+  if (shifts.length === 0 && maintenanceWindows.length === 0) {
+    return calculateEndDate(startDate, workingMinutes);
+  }
+
+  let current = parseDate(startDate);
+  let remaining = workingMinutes;
+
+  // Move to next available time
+  current = getNextAvailableTime(current, shifts, maintenanceWindows);
+
+  const maxIterations = 10000;
+  for (let i = 0; i < maxIterations && remaining > 0; i++) {
+    const availableMinutes = getAvailableMinutes(current, shifts, maintenanceWindows);
+
+    if (availableMinutes <= 0) {
+      current = current.plus({ minutes: 1 });
+      current = getNextAvailableTime(current, shifts, maintenanceWindows);
+      continue;
+    }
+
+    if (remaining <= availableMinutes) {
+      current = current.plus({ minutes: remaining });
+      remaining = 0;
+    } else {
+      remaining -= availableMinutes;
+      current = current.plus({ minutes: availableMinutes });
+      current = getNextAvailableTime(current, shifts, maintenanceWindows);
+    }
+  }
+
+  return formatDate(current);
 }
