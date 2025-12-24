@@ -1,5 +1,10 @@
 /**
  * Data structures as defined in the requirement document.
+ *
+ * Key considerations:
+ * - All dates in UTC
+ * - durationMinutes = working time, not elapsed time
+ * - Maintenance windows = blocked time on work centers
  */
 
 // Work Order
@@ -10,9 +15,9 @@ export interface WorkOrder {
     workOrderNumber: string;
     manufacturingOrderId: string;
     workCenterId: string;
-    startDate: string;
-    endDate: string;
-    durationMinutes: number;
+    startDate: string;                // UTC
+    endDate: string;                  // UTC
+    durationMinutes: number;          // Working time required (not elapsed)
     isMaintenance: boolean;
     dependsOnWorkOrderIds: string[];
   };
@@ -47,4 +52,28 @@ export interface ManufacturingOrder {
     quantity: number;
     dueDate: string;
   };
+}
+
+// Reflow Input/Output
+export interface ReflowInput {
+  workOrders: WorkOrder[];
+  workCenters: WorkCenter[];
+  manufacturingOrders: ManufacturingOrder[];
+}
+
+export interface ReflowChange {
+  workOrderId: string;
+  workOrderNumber: string;
+  originalStartDate: string;
+  originalEndDate: string;
+  newStartDate: string;
+  newEndDate: string;
+  delayMinutes: number;
+  reason: string;
+}
+
+export interface ReflowResult {
+  updatedWorkOrders: WorkOrder[];
+  changes: ReflowChange[];
+  explanation: string;
 }
