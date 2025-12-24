@@ -32,6 +32,7 @@ export interface WorkOrder {
     startDate: string;                // UTC
     endDate: string;                  // UTC
     durationMinutes: number;          // Working time required (not elapsed)
+    setupTimeMinutes?: number;        // Setup time before production (counts as working time)
     isMaintenance: boolean;
     dependsOnWorkOrderIds: string[];
   };
@@ -78,8 +79,19 @@ export interface ReflowChange {
   reason: string;
 }
 
+// Schedule metrics for analysis
+export interface ScheduleMetrics {
+  totalDelayMinutes: number;          // Sum of all delays
+  averageDelayMinutes: number;        // Average delay per rescheduled order
+  maxDelayMinutes: number;            // Maximum single order delay
+  workOrdersRescheduled: number;      // Count of orders with changed dates
+  workOrdersUnchanged: number;        // Count of orders with same dates
+  utilizationByWorkCenter: Map<string, number>; // (working min / available shift min)
+}
+
 export interface ReflowResult {
   updatedWorkOrders: WorkOrder[];
   changes: ReflowChange[];
   explanation: string;
+  metrics: ScheduleMetrics;
 }

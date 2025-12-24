@@ -9,7 +9,7 @@
  * - Shifts define when work can be performed
  */
 
-import { WorkOrder, WorkCenter, ReflowInput, ReflowResult, ReflowChange } from './types.js';
+import { WorkOrder, WorkCenter, ReflowInput, ReflowResult, ReflowChange, ScheduleMetrics } from './types.js';
 import {
   calculateEndDateWithShiftsAndMaintenance,
   parseDate,
@@ -54,6 +54,7 @@ export class ReflowService {
         updatedWorkOrders: workOrders.map(wo => this.cloneWorkOrder(wo)),
         changes: [],
         explanation: `Cycle detected in dependencies: ${sortResult.cycleNodes?.join(' -> ')}`,
+        metrics: this.emptyMetrics(),
       };
     }
 
@@ -125,10 +126,13 @@ export class ReflowService {
       const workCenterId = wo.data.workCenterId;
       const slots = workCenterSlots.get(workCenterId) ?? [];
 
+      // Calculate total working time (duration + setup time)
+      const totalWorkingMinutes = wo.data.durationMinutes + (wo.data.setupTimeMinutes ?? 0);
+
       // Find earliest available slot that doesn't conflict
       let proposedStart = earliestStart;
       let proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
-        formatDate(proposedStart), wo.data.durationMinutes, shifts, maintenanceWindows
+        formatDate(proposedStart), totalWorkingMinutes, shifts, maintenanceWindows
       ));
 
       // Keep pushing forward until no conflicts
@@ -141,7 +145,7 @@ export class ReflowService {
             proposedStart = slot.end;
             proposedStart = getNextAvailableTime(proposedStart, shifts, maintenanceWindows);
             proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
-              formatDate(proposedStart), wo.data.durationMinutes, shifts, maintenanceWindows
+              formatDate(proposedStart), totalWorkingMinutes, shifts, maintenanceWindows
             ));
             hasConflict = true;
             break;
@@ -196,10 +200,20 @@ export class ReflowService {
     // Build final list maintaining original order
     const updatedWorkOrders = workOrders.map(wo => updatedMap.get(wo.docId)!);
 
+    // Calculate metrics
+    const metrics = this.calculateMetrics(
+      workOrders,
+      updatedWorkOrders,
+      changes,
+      workCenters,
+      workCenterSlots
+    );
+
     return {
       updatedWorkOrders,
       changes,
       explanation: this.buildExplanation(changes),
+      metrics,
     };
   }
 
@@ -226,5 +240,75 @@ export class ReflowService {
       return 'No changes required.';
     }
     return `Rescheduled ${changes.length} work order(s).`;
+  }
+
+  private emptyMetrics(): ScheduleMetrics {
+    return {
+      totalDelayMinutes: 0,
+      averageDelayMinutes: 0,
+      maxDelayMinutes: 0,
+      workOrdersRescheduled: 0,
+      workOrdersUnchanged: 0,
+      utilizationByWorkCenter: new Map(),
+    };
+  }
+
+  private calculateMetrics(
+    originalWorkOrders: WorkOrder[],
+    updatedWorkOrders: WorkOrder[],
+    changes: ReflowChange[],
+    workCenters: WorkCenter[],
+    workCenterSlots: Map<string, ScheduledSlot[]>
+  ): ScheduleMetrics {
+    // Calculate delay metrics
+    const delays = changes.map(c => c.delayMinutes).filter(d => d > 0);
+    const totalDelayMinutes = delays.reduce((sum, d) => sum + d, 0);
+    const averageDelayMinutes = delays.length > 0 ? totalDelayMinutes / delays.length : 0;
+    const maxDelayMinutes = delays.length > 0 ? Math.max(...delays) : 0;
+
+    // Count rescheduled vs unchanged
+    const workOrdersRescheduled = changes.length;
+    const workOrdersUnchanged = originalWorkOrders.filter(wo => !wo.data.isMaintenance).length - workOrdersRescheduled;
+
+    // Calculate utilization by work center
+    const utilizationByWorkCenter = new Map<string, number>();
+
+    for (const wc of workCenters) {
+      const slots = workCenterSlots.get(wc.docId) ?? [];
+      if (slots.length === 0) {
+        utilizationByWorkCenter.set(wc.docId, 0);
+        continue;
+      }
+
+      // Calculate total working minutes scheduled
+      let totalWorkingMinutes = 0;
+      for (const slot of slots) {
+        const wo = updatedWorkOrders.find(w => w.docId === slot.workOrderId);
+        if (wo && !wo.data.isMaintenance) {
+          totalWorkingMinutes += wo.data.durationMinutes + (wo.data.setupTimeMinutes ?? 0);
+        }
+      }
+
+      // Calculate available shift minutes (simplified: assume 1 week)
+      const shiftsPerWeek = wc.data.shifts.length;
+      const hoursPerShift = wc.data.shifts[0]
+        ? wc.data.shifts[0].endHour - wc.data.shifts[0].startHour
+        : 0;
+      const availableMinutesPerWeek = shiftsPerWeek * hoursPerShift * 60;
+
+      const utilization = availableMinutesPerWeek > 0
+        ? totalWorkingMinutes / availableMinutesPerWeek
+        : 0;
+      utilizationByWorkCenter.set(wc.docId, Math.round(utilization * 100) / 100);
+    }
+
+    return {
+      totalDelayMinutes,
+      averageDelayMinutes: Math.round(averageDelayMinutes),
+      maxDelayMinutes,
+      workOrdersRescheduled,
+      workOrdersUnchanged,
+      utilizationByWorkCenter,
+    };
   }
 }

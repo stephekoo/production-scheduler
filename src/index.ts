@@ -11,6 +11,7 @@ import * as scenario3 from './data/scenario-3-maintenance.js';
 import * as scenario4 from './data/scenario-4-multi-constraint.js';
 import * as scenario5 from './data/scenario-5-competing-orders.js';
 import * as scenario6 from './data/scenario-6-impossible.js';
+import * as scenario7 from './data/scenario-7-setup-time.js';
 
 const service = new ReflowService();
 
@@ -45,6 +46,12 @@ function runScenario(name: string, data: ReflowInput) {
     }
   }
 
+  console.log('\nMetrics:');
+  console.log(`  Total delay: ${result.metrics.totalDelayMinutes} min`);
+  console.log(`  Average delay: ${result.metrics.averageDelayMinutes} min`);
+  console.log(`  Max delay: ${result.metrics.maxDelayMinutes} min`);
+  console.log(`  Rescheduled: ${result.metrics.workOrdersRescheduled}, Unchanged: ${result.metrics.workOrdersUnchanged}`);
+
   console.log('\n' + result.explanation);
   console.log('\n');
 }
@@ -56,3 +63,4 @@ runScenario('Scenario 3: Maintenance Window', scenario3);
 runScenario('Scenario 4: Multi-Constraint', scenario4);
 runScenario('Scenario 5: Competing Orders', scenario5);
 runScenario('Scenario 6: Impossible (Circular)', scenario6);
+runScenario('Scenario 7: Setup Time', scenario7);
