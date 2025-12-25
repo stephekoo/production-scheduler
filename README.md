@@ -106,3 +106,37 @@ src/
 - `averageDelayMinutes`: Average delay per order
 - `maxDelayMinutes`: Maximum single delay
 - `utilizationByWorkCenter`: Working time / available time
+
+## Trade-offs
+
+### Greedy vs Optimization
+- **Chosen:** Greedy algorithm (earliest available slot)
+- **Trade-off:** May not minimize total delay, but predictable and fast
+- **Rationale:** Simpler to understand, debug, and maintain; O(n²) worst case
+
+### Push-forward vs Re-layout
+- **Chosen:** Push-forward (move affected orders later)
+- **Trade-off:** May leave gaps in schedule
+- **Rationale:** Preserves user intent and schedule stability
+
+### Priority: Earlier Original Start Wins
+- **Chosen:** Original start date determines priority
+- **Trade-off:** May delay orders with later original starts even if they could fit earlier
+- **Rationale:** Predictable behavior, maintains relative ordering
+
+## Known Limitations
+
+1. **No backfilling**: Gaps left by pushed orders are not filled by later orders
+2. **Single work center per order**: Orders cannot span multiple work centers
+3. **No partial shifts**: Cannot handle mid-day shift breaks (e.g., lunch)
+4. **UTC only**: All dates assumed to be UTC, no timezone handling
+5. **No optimization**: Does not minimize total delay or maximize utilization
+6. **Memory**: Stores all slots in memory; may not scale to millions of orders
+
+## AI Prompts
+
+See `prompts/` directory for AI collaboration documentation:
+- `algorithm-design.md` - Core algorithm decisions
+- `shift-calculation.md` - Shift boundary handling
+- `maintenance-windows.md` - Maintenance window logic
+- `bonus-features.md` - Setup time, metrics, DAG

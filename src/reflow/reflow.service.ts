@@ -7,6 +7,11 @@
  * - Dependencies must complete before dependent work can start
  * - Work center conflicts: earlier original start wins
  * - Shifts define when work can be performed
+ *
+ * @upgrade Add backfilling to fill gaps left by pushed orders
+ * @upgrade Add constraint satisfaction solver for optimal scheduling
+ * @upgrade Support multi-work-center orders (order spans multiple centers)
+ * @upgrade Add priority levels beyond original start date
  */
 
 import { WorkOrder, WorkCenter, ReflowInput, ReflowResult, ReflowChange, ScheduleMetrics } from './types.js';

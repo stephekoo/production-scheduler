@@ -6,6 +6,10 @@
  * - Track working minutes, not elapsed time
  * - Maintenance windows = blocked time on work centers
  * - Luxon weekday: 1=Mon...7=Sun; Spec dayOfWeek: 0=Sun...6=Sat
+ *
+ * @upgrade Add timezone support for work centers in different regions
+ * @upgrade Support partial shifts (e.g., lunch breaks mid-day)
+ * @upgrade Add holiday calendar support
  */
 
 import { DateTime } from 'luxon';
