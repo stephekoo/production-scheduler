@@ -55,8 +55,60 @@ src/
   index.ts             # Demo runner
 ```
 
+```mermaid
+graph TB
+    subgraph Input
+        WO[Work Orders]
+        WC[Work Centers]
+        MO[Manufacturing Orders]
+    end
+
+    subgraph ReflowService
+        DG[Dependency Graph]
+        CC[Constraint Checker]
+        DU[Date Utils]
+    end
+
+    subgraph Output
+        UWO[Updated Work Orders]
+        CH[Changes]
+        ME[Metrics]
+    end
+
+    WO --> DG
+    WO --> CC
+    WC --> CC
+    WC --> DU
+    DG --> UWO
+    CC --> UWO
+    DU --> UWO
+    UWO --> CH
+    UWO --> ME
+```
+
 ## Algorithm
 
+```mermaid
+flowchart TD
+    A[Start] --> B[Build Dependency Graph]
+    B --> C{Cycle Detected?}
+    C -->|Yes| D[Return Error]
+    C -->|No| E[Schedule Maintenance Orders]
+    E --> F[Sort by Original Start]
+    F --> G[Process Next Work Order]
+    G --> H[Find Earliest Start from Dependencies]
+    H --> I[Align to Shift Hours]
+    I --> J[Skip Maintenance Windows]
+    J --> K{Work Center Conflict?}
+    K -->|Yes| L[Push to After Conflict]
+    L --> I
+    K -->|No| M[Calculate End Date]
+    M --> N{More Orders?}
+    N -->|Yes| G
+    N -->|No| O[Return Updated Schedule]
+```
+
+**Steps:**
 1. Build dependency graph from work orders
 2. Detect cycles using Kahn's algorithm (BFS topological sort)
 3. Schedule maintenance orders first (fixed)
@@ -75,6 +127,55 @@ src/
 | Work Center | 2 | Earlier original start wins |
 | Shifts | 3 | Work only during operating hours |
 | Maintenance | 4 | Skip blocked time windows |
+
+### Dependency Example
+
+```mermaid
+graph LR
+    WO1[WO-001<br/>8:00-10:00] --> WO2[WO-002<br/>10:00-12:00]
+    WO1 --> WO3[WO-003<br/>10:00-11:00]
+    WO2 --> WO4[WO-004<br/>12:00-14:00]
+    WO3 --> WO4
+```
+
+WO-004 cannot start until both WO-002 and WO-003 complete.
+
+### Shift Spanning Example
+
+```
+Work Order: 120 min duration
+Shift: Mon-Fri 8:00-17:00
+
+Monday 16:00 ──────────────────────────────────────────► Tuesday 09:00
+    │                                                        │
+    ├── Work 60 min (16:00-17:00) ──┐                       │
+    │                               │                       │
+    │   ┌───────────────────────────┘                       │
+    │   │ Pause overnight (shift ends)                      │
+    │   └───────────────────────────┐                       │
+    │                               │                       │
+    │                               └── Resume 08:00 ───────┤
+    │                                   Work 60 min         │
+    └───────────────────────────────────────────────────────┘
+```
+
+### Maintenance Window Example
+
+```
+Work Order: 240 min (4 hours)
+Maintenance: 10:00-14:00
+
+08:00     10:00          14:00     16:00
+  │         │              │         │
+  ├─ Work ──┤              ├─ Work ──┤
+  │ 120 min │  Maintenance │ 120 min │
+  │         │   (blocked)  │         │
+  ▼         ▼              ▼         ▼
+┌───────────┬──────────────┬─────────┐
+│  Working  │   Skipped    │ Working │
+│  2 hours  │   4 hours    │ 2 hours │
+└───────────┴──────────────┴─────────┘
+```
 
 ## Test Scenarios
 
