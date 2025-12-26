@@ -8,7 +8,7 @@ describe('ReflowService', () => {
     startDate: string,
     endDate: string,
     durationMinutes: number,
-    options: { isMaintenance?: boolean; dependsOnWorkOrderIds?: string[] } = {}
+    options: { isMaintenance?: boolean; dependsOnWorkOrderIds?: string[]; priority?: number } = {}
   ): WorkOrder => ({
     docId: id,
     docType: 'workOrder',
@@ -19,6 +19,7 @@ describe('ReflowService', () => {
       startDate,
       endDate,
       durationMinutes,
+      priority: options.priority,
       isMaintenance: options.isMaintenance ?? false,
       dependsOnWorkOrderIds: options.dependsOnWorkOrderIds ?? [],
     },
@@ -409,6 +410,39 @@ describe('ReflowService', () => {
 
       // 8:00-10:00 = 2 hours, skip 10:00-14:00 maintenance, 14:00-16:00 = 2 hours
       expect(result.updatedWorkOrders[0].data.endDate).toBe('2025-01-06T16:00:00.000Z');
+    });
+
+    it('should schedule higher priority orders first (lower number = higher priority)', () => {
+      const service = new ReflowService();
+      // Both have same start time, but different priorities
+      // WO-001 appears first in list but has lower priority
+      const workOrders = [
+        createWorkOrder(
+          'wo-001',
+          '2025-01-06T08:00:00.000Z',
+          '2025-01-06T10:00:00.000Z',
+          120,
+          { priority: 5 } // Low priority
+        ),
+        createWorkOrder(
+          'wo-002',
+          '2025-01-06T08:00:00.000Z', // Same start time
+          '2025-01-06T10:00:00.000Z',
+          120,
+          { priority: 1 } // High priority
+        ),
+      ];
+
+      const result = service.reflow({
+        workOrders,
+        workCenters: [createWorkCenter('wc-001')],
+        manufacturingOrders: [createManufacturingOrder('mo-001')],
+      });
+
+      // WO-002 (priority 1) should be scheduled first at 08:00-10:00
+      // WO-001 (priority 5) should be pushed to 10:00-12:00 due to conflict
+      expect(result.updatedWorkOrders.find(wo => wo.docId === 'wo-002')?.data.startDate).toBe('2025-01-06T08:00:00.000Z');
+      expect(result.updatedWorkOrders.find(wo => wo.docId === 'wo-001')?.data.startDate).toBe('2025-01-06T10:00:00.000Z');
     });
   });
 });

@@ -78,6 +78,9 @@ export function generateWorkOrders(
       ? rng.nextInt(cfg.minSetupTimeMinutes!, cfg.maxSetupTimeMinutes!)
       : undefined;
 
+    // Generate priority (1-5, lower = higher priority)
+    const priority = rng.nextInt(1, 5);
+
     // Is this a maintenance order?
     const isMaintenance = rng.nextBool(cfg.maintenanceProbability!);
 
@@ -110,6 +113,7 @@ export function generateWorkOrders(
         endDate: endDate.toISO()!,
         durationMinutes,
         setupTimeMinutes,
+        priority,
         isMaintenance,
         dependsOnWorkOrderIds,
       },

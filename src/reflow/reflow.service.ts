@@ -5,13 +5,14 @@
  * - All dates in UTC
  * - durationMinutes = working time, not elapsed time
  * - Dependencies must complete before dependent work can start
- * - Work center conflicts: earlier original start wins
+ * - Work center conflicts: higher priority wins, then earlier original start
  * - Shifts define when work can be performed
+ *
+ * Implemented from @upgrade: priority field (1-5, lower = higher priority, default 3)
  *
  * @upgrade Add backfilling to fill gaps left by pushed orders
  * @upgrade Add constraint satisfaction solver for optimal scheduling
  * @upgrade Support multi-work-center orders (order spans multiple centers)
- * @upgrade Add priority levels beyond original start date
  */
 
 import { WorkOrder, WorkCenter, ReflowInput, ReflowResult, ReflowChange, ScheduleMetrics } from './types.js';
@@ -36,24 +37,56 @@ export class ReflowService {
   private graph = new DependencyGraph();
 
   /**
-   * Reflow work orders to produce a valid schedule.
+   * Main reflow algorithm - reschedules work orders to resolve conflicts.
+   *
+   * Steps:
+   * 1. Build dependency graph and detect cycles
+   * 2. Sort work orders by priority (lower number = higher priority)
+   * 3. Schedule maintenance first (fixed, never moves)
+   * 4. For each work order: find earliest valid slot and schedule it
    */
   reflow(input: ReflowInput): ReflowResult {
     const { workOrders, workCenters } = input;
-    const changes: ReflowChange[] = [];
-    const workOrderMap = new Map<string, WorkOrder>();
-    const workCenterMap = new Map<string, WorkCenter>();
 
-    // Build work center lookup
-    for (const wc of workCenters) {
-      workCenterMap.set(wc.docId, wc);
+    // Step 1: Build dependency graph and detect cycles
+    const cycleError = this.detectCycles(workOrders);
+    if (cycleError) return cycleError;
+
+    // Step 2: Sort by priority, then by start date
+    const sortedOrders = this.sortByPriority(workOrders);
+
+    // Step 3: Schedule maintenance first (fixed slots)
+    const workCenterMap = this.buildWorkCenterMap(workCenters);
+    const workCenterSlots = new Map<string, ScheduledSlot[]>();
+    const updatedMap = new Map<string, WorkOrder>();
+    this.scheduleMaintenanceOrders(workOrders, workCenterSlots, updatedMap);
+
+    // Step 4: Schedule each work order in priority order
+    const changes: ReflowChange[] = [];
+    for (const wo of sortedOrders) {
+      this.scheduleWorkOrder(wo, workCenterMap, workCenterSlots, updatedMap, changes);
     }
 
-    // Build dependency graph
-    this.graph.build(workOrders);
+    // Build result
+    const updatedWorkOrders = workOrders.map(wo => updatedMap.get(wo.docId)!);
+    const metrics = this.calculateMetrics(workOrders, updatedWorkOrders, changes, workCenters, workCenterSlots);
 
-    // Get topological order
+    return {
+      updatedWorkOrders,
+      changes,
+      explanation: this.buildExplanation(changes),
+      metrics,
+    };
+  }
+
+  // ============================================================
+  // Step 1: Cycle Detection
+  // ============================================================
+
+  private detectCycles(workOrders: WorkOrder[]): ReflowResult | null {
+    this.graph.build(workOrders);
     const sortResult = this.graph.topologicalSort();
+
     if (sortResult.hasCycle) {
       return {
         updatedWorkOrders: workOrders.map(wo => this.cloneWorkOrder(wo)),
@@ -62,164 +95,186 @@ export class ReflowService {
         metrics: this.emptyMetrics(),
       };
     }
+    return null;
+  }
 
-    // Create lookup map
-    for (const wo of workOrders) {
-      workOrderMap.set(wo.docId, wo);
-    }
+  // ============================================================
+  // Step 2: Priority Sorting
+  // ============================================================
 
-    // Sort by original start date for priority (earlier original start wins)
-    const sortedByOriginalStart = [...workOrders]
+  private sortByPriority(workOrders: WorkOrder[]): WorkOrder[] {
+    return [...workOrders]
       .filter(wo => !wo.data.isMaintenance)
       .sort((a, b) => {
-        const aStart = parseDate(a.data.startDate);
-        const bStart = parseDate(b.data.startDate);
-        return aStart.toMillis() - bStart.toMillis();
+        const aPriority = a.data.priority ?? 3;
+        const bPriority = b.data.priority ?? 3;
+        if (aPriority !== bPriority) {
+          return aPriority - bPriority;
+        }
+        return parseDate(a.data.startDate).toMillis() - parseDate(b.data.startDate).toMillis();
       });
+  }
 
-    // Track scheduled slots per work center
-    const workCenterSlots = new Map<string, ScheduledSlot[]>();
+  // ============================================================
+  // Step 3: Maintenance Scheduling (Fixed)
+  // ============================================================
 
-    // Map to store updated work orders
-    const updatedMap = new Map<string, WorkOrder>();
-
-    // First, schedule maintenance orders (they are fixed)
+  private scheduleMaintenanceOrders(
+    workOrders: WorkOrder[],
+    workCenterSlots: Map<string, ScheduledSlot[]>,
+    updatedMap: Map<string, WorkOrder>
+  ): void {
     for (const wo of workOrders) {
       if (wo.data.isMaintenance) {
-        const cloned = this.cloneWorkOrder(wo);
-        updatedMap.set(wo.docId, cloned);
-
-        // Add to work center slots
-        const slots = workCenterSlots.get(wo.data.workCenterId) ?? [];
-        slots.push({
+        updatedMap.set(wo.docId, this.cloneWorkOrder(wo));
+        this.addSlot(workCenterSlots, wo.data.workCenterId, {
           workOrderId: wo.docId,
           start: parseDate(wo.data.startDate),
           end: parseDate(wo.data.endDate),
         });
-        workCenterSlots.set(wo.data.workCenterId, slots);
+      }
+    }
+  }
+
+  // ============================================================
+  // Step 4: Work Order Scheduling
+  // ============================================================
+
+  private scheduleWorkOrder(
+    wo: WorkOrder,
+    workCenterMap: Map<string, WorkCenter>,
+    workCenterSlots: Map<string, ScheduledSlot[]>,
+    updatedMap: Map<string, WorkOrder>,
+    changes: ReflowChange[]
+  ): void {
+    const workCenter = workCenterMap.get(wo.data.workCenterId);
+    const shifts: Shift[] = workCenter?.data.shifts ?? [];
+    const maintenanceWindows: MaintenanceWindow[] = workCenter?.data.maintenanceWindows ?? [];
+
+    // Find earliest start from dependencies
+    const earliestStart = this.findEarliestStart(wo, updatedMap, shifts, maintenanceWindows);
+
+    // Find available slot (no conflicts)
+    const totalMinutes = wo.data.durationMinutes + (wo.data.setupTimeMinutes ?? 0);
+    const slots = workCenterSlots.get(wo.data.workCenterId) ?? [];
+    const { start, end } = this.findAvailableSlot(earliestStart, totalMinutes, slots, shifts, maintenanceWindows);
+
+    // Update work order
+    const updated = this.cloneWorkOrder(wo);
+    updated.data.startDate = formatDate(start);
+    updated.data.endDate = formatDate(end);
+    updatedMap.set(wo.docId, updated);
+
+    // Record slot
+    this.addSlot(workCenterSlots, wo.data.workCenterId, { workOrderId: wo.docId, start, end });
+
+    // Track change if any
+    this.recordChange(wo, updated, start, updatedMap, changes);
+  }
+
+  private findEarliestStart(
+    wo: WorkOrder,
+    updatedMap: Map<string, WorkOrder>,
+    shifts: Shift[],
+    maintenanceWindows: MaintenanceWindow[]
+  ): DateTime {
+    let earliest = parseDate(wo.data.startDate);
+
+    // Wait for all dependencies to complete
+    for (const depId of this.graph.getDependencies(wo.docId)) {
+      const depWo = updatedMap.get(depId);
+      if (depWo) {
+        const depEnd = parseDate(depWo.data.endDate);
+        if (depEnd > earliest) earliest = depEnd;
       }
     }
 
-    // Process in priority order (earlier original start wins)
-    for (const wo of sortedByOriginalStart) {
-      const originalStart = wo.data.startDate;
-      const originalEnd = wo.data.endDate;
+    // Align to next available shift time
+    return getNextAvailableTime(earliest, shifts, maintenanceWindows);
+  }
 
-      // Get work center shifts and maintenance windows
-      const workCenter = workCenterMap.get(wo.data.workCenterId);
-      const shifts: Shift[] = workCenter?.data.shifts ?? [];
-      const maintenanceWindows: MaintenanceWindow[] = workCenter?.data.maintenanceWindows ?? [];
+  private findAvailableSlot(
+    start: DateTime,
+    totalMinutes: number,
+    slots: ScheduledSlot[],
+    shifts: Shift[],
+    maintenanceWindows: MaintenanceWindow[]
+  ): { start: DateTime; end: DateTime } {
+    let proposedStart = start;
+    let proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
+      formatDate(proposedStart), totalMinutes, shifts, maintenanceWindows
+    ));
 
-      // Calculate earliest start based on dependencies
-      let earliestStart = parseDate(originalStart);
-      const dependencies = this.graph.getDependencies(wo.docId);
+    // Push forward until no conflicts
+    let hasConflict = true;
+    while (hasConflict) {
+      hasConflict = false;
+      for (const slot of slots) {
+        if (this.overlaps(proposedStart, proposedEnd, slot.start, slot.end)) {
+          proposedStart = getNextAvailableTime(slot.end, shifts, maintenanceWindows);
+          proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
+            formatDate(proposedStart), totalMinutes, shifts, maintenanceWindows
+          ));
+          hasConflict = true;
+          break;
+        }
+      }
+    }
 
-      for (const depId of dependencies) {
+    return { start: proposedStart, end: proposedEnd };
+  }
+
+  private recordChange(
+    original: WorkOrder,
+    updated: WorkOrder,
+    newStart: DateTime,
+    updatedMap: Map<string, WorkOrder>,
+    changes: ReflowChange[]
+  ): void {
+    if (original.data.startDate === updated.data.startDate &&
+        original.data.endDate === updated.data.endDate) {
+      return;
+    }
+
+    const delayMinutes = this.calculateDelayMinutes(original.data.endDate, updated.data.endDate);
+    let reason = 'Recalculated end date based on duration';
+
+    if (newStart > parseDate(original.data.startDate)) {
+      const pushedByDependency = this.graph.getDependencies(original.docId).some(depId => {
         const depWo = updatedMap.get(depId);
-        if (depWo) {
-          const depEnd = parseDate(depWo.data.endDate);
-          if (depEnd > earliestStart) {
-            earliestStart = depEnd;
-          }
-        }
-      }
-
-      // Align to next available time (respecting shifts and maintenance)
-      earliestStart = getNextAvailableTime(earliestStart, shifts, maintenanceWindows);
-
-      // Check for work center conflicts
-      const workCenterId = wo.data.workCenterId;
-      const slots = workCenterSlots.get(workCenterId) ?? [];
-
-      // Calculate total working time (duration + setup time)
-      const totalWorkingMinutes = wo.data.durationMinutes + (wo.data.setupTimeMinutes ?? 0);
-
-      // Find earliest available slot that doesn't conflict
-      let proposedStart = earliestStart;
-      let proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
-        formatDate(proposedStart), totalWorkingMinutes, shifts, maintenanceWindows
-      ));
-
-      // Keep pushing forward until no conflicts
-      let hasConflict = true;
-      while (hasConflict) {
-        hasConflict = false;
-        for (const slot of slots) {
-          if (this.overlaps(proposedStart, proposedEnd, slot.start, slot.end)) {
-            // Push to after this slot
-            proposedStart = slot.end;
-            proposedStart = getNextAvailableTime(proposedStart, shifts, maintenanceWindows);
-            proposedEnd = parseDate(calculateEndDateWithShiftsAndMaintenance(
-              formatDate(proposedStart), totalWorkingMinutes, shifts, maintenanceWindows
-            ));
-            hasConflict = true;
-            break;
-          }
-        }
-      }
-
-      const newStart = formatDate(proposedStart);
-      const newEnd = formatDate(proposedEnd);
-
-      const updated = this.cloneWorkOrder(wo);
-      updated.data.startDate = newStart;
-      updated.data.endDate = newEnd;
-      updatedMap.set(wo.docId, updated);
-
-      // Add to work center slots
-      slots.push({
-        workOrderId: wo.docId,
-        start: proposedStart,
-        end: proposedEnd,
+        return depWo && parseDate(depWo.data.endDate) > parseDate(original.data.startDate);
       });
-      workCenterSlots.set(workCenterId, slots);
-
-      // Track if there was a change
-      if (newStart !== originalStart || newEnd !== originalEnd) {
-        const delayMinutes = this.calculateDelayMinutes(originalEnd, newEnd);
-        let reason = 'Recalculated end date based on duration';
-        if (proposedStart > parseDate(originalStart)) {
-          const depPushed = dependencies.some(depId => {
-            const depWo = updatedMap.get(depId);
-            return depWo && parseDate(depWo.data.endDate) > parseDate(originalStart);
-          });
-          if (depPushed) {
-            reason = 'Pushed forward due to dependency completion';
-          } else {
-            reason = 'Pushed forward due to work center conflict';
-          }
-        }
-        changes.push({
-          workOrderId: wo.docId,
-          workOrderNumber: wo.data.workOrderNumber,
-          originalStartDate: originalStart,
-          originalEndDate: originalEnd,
-          newStartDate: newStart,
-          newEndDate: newEnd,
-          delayMinutes,
-          reason,
-        });
-      }
+      reason = pushedByDependency
+        ? 'Pushed forward due to dependency completion'
+        : 'Pushed forward due to work center conflict';
     }
 
-    // Build final list maintaining original order
-    const updatedWorkOrders = workOrders.map(wo => updatedMap.get(wo.docId)!);
+    changes.push({
+      workOrderId: original.docId,
+      workOrderNumber: original.data.workOrderNumber,
+      originalStartDate: original.data.startDate,
+      originalEndDate: original.data.endDate,
+      newStartDate: updated.data.startDate,
+      newEndDate: updated.data.endDate,
+      delayMinutes,
+      reason,
+    });
+  }
 
-    // Calculate metrics
-    const metrics = this.calculateMetrics(
-      workOrders,
-      updatedWorkOrders,
-      changes,
-      workCenters,
-      workCenterSlots
-    );
+  // ============================================================
+  // Helpers
+  // ============================================================
 
-    return {
-      updatedWorkOrders,
-      changes,
-      explanation: this.buildExplanation(changes),
-      metrics,
-    };
+  private buildWorkCenterMap(workCenters: WorkCenter[]): Map<string, WorkCenter> {
+    const map = new Map<string, WorkCenter>();
+    for (const wc of workCenters) map.set(wc.docId, wc);
+    return map;
+  }
+
+  private addSlot(slots: Map<string, ScheduledSlot[]>, workCenterId: string, slot: ScheduledSlot): void {
+    const existing = slots.get(workCenterId) ?? [];
+    existing.push(slot);
+    slots.set(workCenterId, existing);
   }
 
   private overlaps(start1: DateTime, end1: DateTime, start2: DateTime, end2: DateTime): boolean {

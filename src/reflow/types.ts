@@ -33,6 +33,7 @@ export interface WorkOrder {
     endDate: string;                  // UTC
     durationMinutes: number;          // Working time required (not elapsed)
     setupTimeMinutes?: number;        // Setup time before production (counts as working time)
+    priority?: number;                // 1-5, lower = higher priority, default 3
     isMaintenance: boolean;
     dependsOnWorkOrderIds: string[];
   };

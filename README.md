@@ -5,7 +5,7 @@ A TypeScript-based production scheduling system that handles work order scheduli
 ## Features
 
 - **Dependency Management**: Topological sorting with cycle detection
-- **Work Center Conflicts**: Priority-based scheduling (earlier original start wins)
+- **Work Center Conflicts**: Priority-based scheduling (1-5, lower = higher priority)
 - **Shift Boundaries**: Respects work center operating hours
 - **Maintenance Windows**: Avoids blocked time periods
 - **Setup Time**: Accounts for pre-production setup time
@@ -25,7 +25,7 @@ npm install
 npm start
 ```
 
-Runs 8 scenarios demonstrating different scheduling constraints.
+Runs 9 scenarios demonstrating different scheduling constraints.
 
 ### Run Tests
 
@@ -33,7 +33,7 @@ Runs 8 scenarios demonstrating different scheduling constraints.
 npm test
 ```
 
-45 tests covering:
+46 tests covering:
 - Dependency graph operations
 - Constraint validation
 - Date utilities with shift handling
@@ -41,82 +41,86 @@ npm test
 
 ## Architecture
 
+### Project Structure
+
 ```
 src/
   reflow/
-    types.ts           # Core data structures
-    reflow.service.ts  # Main scheduling algorithm
+    types.ts            # Core data structures (WorkOrder, WorkCenter, ReflowResult)
+    reflow.service.ts   # Main scheduling algorithm
     dependency-graph.ts # DAG with topological sort
     constraint-checker.ts # Constraint validation
   utils/
-    date-utils.ts      # Shift-aware date calculations
+    date-utils.ts       # Shift-aware date calculations
   data/
-    scenario-*.ts      # Test scenarios
-  index.ts             # Demo runner
+    scenario-*.ts       # Test scenarios
+  index.ts              # Demo runner
 ```
 
+### Data Flow
+
+**Figure 1: Reflow Data Flow**
+
 ```mermaid
-graph TB
+flowchart LR
     subgraph Input
-        WO[Work Orders]
-        WC[Work Centers]
-        MO[Manufacturing Orders]
+        WO[WorkOrders]
+        WC[WorkCenters]
     end
 
-    subgraph ReflowService
-        DG[Dependency Graph]
-        CC[Constraint Checker]
-        DU[Date Utils]
+    subgraph Processing
+        B[Build Graph]
+        T[Topological Sort]
+        P[Priority Sort]
+        M[Schedule Maintenance]
+        S[Schedule Work Orders]
+        C[Calculate Metrics]
     end
 
     subgraph Output
-        UWO[Updated Work Orders]
+        UWO[Updated WorkOrders]
         CH[Changes]
         ME[Metrics]
     end
 
-    WO --> DG
-    WO --> CC
-    WC --> CC
-    WC --> DU
-    DG --> UWO
-    CC --> UWO
-    DU --> UWO
-    UWO --> CH
-    UWO --> ME
+    WO --> B --> T --> P --> M --> S --> C
+    WC --> S
+    C --> UWO
+    C --> CH
+    C --> ME
 ```
 
 ## Algorithm
+
+**Figure 2: Scheduling Algorithm Flowchart**
 
 ```mermaid
 flowchart TD
     A[Start] --> B[Build Dependency Graph]
     B --> C{Cycle Detected?}
     C -->|Yes| D[Return Error]
-    C -->|No| E[Schedule Maintenance Orders]
-    E --> F[Sort by Original Start]
+    C -->|No| E[Sort by Priority]
+    E --> F[Schedule Maintenance First]
     F --> G[Process Next Work Order]
     G --> H[Find Earliest Start from Dependencies]
     H --> I[Align to Shift Hours]
-    I --> J[Skip Maintenance Windows]
-    J --> K{Work Center Conflict?}
-    K -->|Yes| L[Push to After Conflict]
-    L --> I
-    K -->|No| M[Calculate End Date]
-    M --> N{More Orders?}
-    N -->|Yes| G
-    N -->|No| O[Return Updated Schedule]
+    I --> J{Work Center Conflict?}
+    J -->|Yes| K[Push to After Conflict]
+    K --> I
+    J -->|No| L[Calculate End Date]
+    L --> M{More Orders?}
+    M -->|Yes| G
+    M -->|No| N[Return Updated Schedule]
 ```
 
 **Steps:**
-1. Build dependency graph from work orders
-2. Detect cycles using Kahn's algorithm (BFS topological sort)
-3. Schedule maintenance orders first (fixed)
-4. Process work orders by original start priority
-5. For each work order:
-   - Calculate earliest start from dependencies
+1. Build dependency graph and detect cycles (Kahn's algorithm)
+2. Sort work orders by priority (1-5, lower = higher), then by start date
+3. Schedule maintenance orders first (fixed, never move)
+4. For each work order in priority order:
+   - Find earliest start from dependencies
    - Align to next available shift time
-   - Resolve work center conflicts
+   - Resolve work center conflicts (push forward until no overlap)
    - Calculate end date accounting for shifts and maintenance
 
 ## Constraints
@@ -124,11 +128,13 @@ flowchart TD
 | Constraint | Priority | Behavior |
 |------------|----------|----------|
 | Dependencies | 1 | Must wait for predecessors |
-| Work Center | 2 | Earlier original start wins |
+| Work Center | 2 | Lower priority number wins (1 beats 3) |
 | Shifts | 3 | Work only during operating hours |
 | Maintenance | 4 | Skip blocked time windows |
 
 ### Dependency Example
+
+**Figure 3: Work Order Dependency Graph**
 
 ```mermaid
 graph LR
@@ -141,6 +147,8 @@ graph LR
 WO-004 cannot start until both WO-002 and WO-003 complete.
 
 ### Shift Spanning Example
+
+**Figure 4: Work Spanning Overnight Shift Break**
 
 ```
 Work Order: 120 min duration
@@ -160,6 +168,8 @@ Monday 16:00 ──────────────────────�
 ```
 
 ### Maintenance Window Example
+
+**Figure 5: Work Paused During Maintenance Window**
 
 ```
 Work Order: 240 min (4 hours)
@@ -181,20 +191,22 @@ Maintenance: 10:00-14:00
 
 | Scenario | Description |
 |----------|-------------|
-| 0 | Basic reflow (no changes needed) |
+| 0 | Baseline (no changes needed) |
 | 1 | Delay cascade through dependencies |
 | 2 | Shift spanning across days |
 | 3 | Maintenance window avoidance |
 | 4 | Multi-constraint (deps + maintenance + shifts) |
-| 5 | Competing orders (resource conflicts) |
-| 6 | Impossible schedule (circular dependency) |
+| 5 | Priority conflict (priority 1 beats priority 3) |
+| 6 | Circular dependency (cycle detected) |
 | 7 | Setup time handling |
+| 8 | Large scale (2000 orders, 25 work centers) |
 
 ## Data Model
 
 ### WorkOrder
 - `durationMinutes`: Working time required
 - `setupTimeMinutes`: Setup time before production
+- `priority`: 1-5, lower = higher priority (default 3)
 - `dependsOnWorkOrderIds`: Predecessor work orders
 - `isMaintenance`: Fixed time block flag
 
@@ -220,10 +232,10 @@ Maintenance: 10:00-14:00
 - **Trade-off:** May leave gaps in schedule
 - **Rationale:** Preserves user intent and schedule stability
 
-### Priority: Earlier Original Start Wins
-- **Chosen:** Original start date determines priority
-- **Trade-off:** May delay orders with later original starts even if they could fit earlier
-- **Rationale:** Predictable behavior, maintains relative ordering
+### Priority Field (1-5)
+- **Chosen:** Explicit priority field (lower number = higher priority)
+- **Trade-off:** Requires priority assignment; ties broken by start date
+- **Rationale:** Gives users explicit control over scheduling order
 
 ## Known Limitations
 
