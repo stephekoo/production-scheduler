@@ -12,6 +12,7 @@ import * as scenario4 from './data/scenario-4-multi-constraint.js';
 import * as scenario5 from './data/scenario-5-competing-orders.js';
 import * as scenario6 from './data/scenario-6-impossible.js';
 import * as scenario7 from './data/scenario-7-setup-time.js';
+import * as scenario8 from './data/scenario-with-json-data.js';
 
 const service = new ReflowService();
 
@@ -84,3 +85,35 @@ runScenario('Scenario 4: Multi-Constraint', scenario4);
 runScenario('Scenario 5: Competing Orders', scenario5);
 runScenario('Scenario 6: Impossible (Circular)', scenario6);
 runScenario('Scenario 7: Setup Time', scenario7);
+
+// Large-scale scenario (special handling - no full table output)
+if (scenario8.workOrders.length > 0) {
+  console.log(`\n${'='.repeat(60)}`);
+  console.log('  Scenario 8: Large-Scale JSON Data');
+  console.log('='.repeat(60));
+  console.log(`\nInput: ${scenario8.workOrders.length} work orders, ${scenario8.workCenters.length} work centers`);
+  if (scenario8.metadata?.seed) {
+    console.log(`Seed: ${scenario8.metadata.seed}, Generated: ${scenario8.metadata.generatedAt}`);
+  }
+
+  const startTime = performance.now();
+  const result = service.reflow({
+    workOrders: scenario8.workOrders,
+    workCenters: scenario8.workCenters,
+    manufacturingOrders: scenario8.manufacturingOrders,
+  });
+  const elapsed = performance.now() - startTime;
+
+  console.log(`\nReflow completed in ${elapsed.toFixed(2)}ms`);
+  console.log('\nMetrics:');
+  console.table({
+    'Total Delay': `${result.metrics.totalDelayMinutes} min`,
+    'Average Delay': `${result.metrics.averageDelayMinutes.toFixed(1)} min`,
+    'Max Delay': `${result.metrics.maxDelayMinutes} min`,
+    'Rescheduled': result.metrics.workOrdersRescheduled,
+    'Unchanged': result.metrics.workOrdersUnchanged,
+  });
+  console.log(`\n${result.explanation}`);
+} else {
+  console.log('\nScenario 8: Skipped (no data). Run `npm run generate:scenario` first.');
+}
